@@ -37,7 +37,19 @@ This project uses a **deterministic sample of ~10K articles**: up to 2,100 per l
 - Raw `.jsonl` files land in a Unity Catalog Volume: `/Volumes/workspace/docs_bronze/landing/mlsum/<load_date>/`.
 - `01_bronze_ingest` reads every file, takes the **language** and **split** from the file name, and keeps a **deterministic sample per language** (ordered by a hash of the URL), so every run picks the same articles.
 - Source fields are kept as they are. Each article gets a stable `doc_id` (SHA-256 of its URL) plus audit columns `_ingested_at`, `_source_file`, `_load_date`.
-- **Articles ingested:** _TODO_
+- **Articles ingested: 9,907**
+
+| Language | Articles | Avg. text length (chars) |
+|---|---|---|
+| German (de) | 2,100 | 3,691 |
+| Spanish (es) | 2,100 | 4,507 |
+| French (fr) | 2,100 | 3,751 |
+| Russian (ru) | 1,507 (all available) | 6,624 |
+| Turkish (tr) | 2,100 | 1,620 |
+
+Turkish articles are about 4× shorter than Russian ones, which affects how many chunks each language produces later.
+
+![Bronze summary](docs/bronze_summary.png)
 
 ### Silver: clean and standardize
 _TODO: text normalization, near-duplicate removal, language detection_
