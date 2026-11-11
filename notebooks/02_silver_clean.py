@@ -176,6 +176,8 @@ kept = kept.join(near_dup_ids, kept.doc_id == near_dup_ids.drop_id, "left_anti")
 # MAGIC   - **distinctive letters**, each worth 2 points: Turkish ı ğ ş İ, Spanish ñ ¿ ¡, German ä ß,
 # MAGIC     French è ê œ ù. Turkish attaches grammar to word endings, so it has fewer separate stopwords;
 # MAGIC     the letters catch short Turkish and Spanish articles that stopwords alone miss.
+# MAGIC - **English** is scored too. It isn't one of MLSUM's languages, but English articles from El País's
+# MAGIC   English edition appear in the Spanish file; detecting them flags a labeling error in the source.
 # MAGIC - The highest score wins. A total score below 5 → `unknown`. `lang_confidence` = winning score ÷ total score.
 # MAGIC
 # MAGIC The detected language is then compared with the label from the source file: a free quality check.
@@ -191,6 +193,10 @@ STOPWORDS = {
            "avec", "ce", "sont", "aux", "été", "plus", "cette", "mais", "il", "elle"],
     "tr": ["ve", "bir", "bu", "için", "ile", "olarak", "olan", "gibi", "daha", "çok", "ancak",
            "kadar", "sonra", "değil", "her", "ise", "göre", "olduğu", "yapılan", "üzerinde"],
+    # English is not one of MLSUM's five languages, but El País's English edition leaks into the
+    # Spanish file. Detecting it lets us flag those articles as mislabeled instead of "unknown".
+    "en": ["the", "and", "of", "to", "is", "was", "that", "for", "with", "has", "have", "from",
+           "by", "which", "this", "are", "were", "their", "it", "had", "been", "would"],
 }
 
 sample_words = F.split(
@@ -202,11 +208,12 @@ def is_stopword(stop):
     return lambda w: F.array_contains(stop_array, w)
 
 # Letters that occur in only one of these four languages (Turkish also uses ö ü ç, so those are left out)
-DISTINCT_LETTERS = {"de": "äÄß", "es": "ñÑ¿¡", "fr": "èêœùÈÊŒ", "tr": "ıİğĞşŞ"}
+DISTINCT_LETTERS = {"de": "äÄß", "es": "ñÑ¿¡", "fr": "èêœùÈÊŒ", "tr": "ıİğĞşŞ", "en": ""}
 sample_text = F.substring("text_clean", 1, 3000)
 
 for lang, stop in STOPWORDS.items():
-    letters = F.length(F.regexp_replace(sample_text, f"[^{DISTINCT_LETTERS[lang]}]", ""))
+    letters = (F.length(F.regexp_replace(sample_text, f"[^{DISTINCT_LETTERS[lang]}]", ""))
+               if DISTINCT_LETTERS[lang] else F.lit(0))
     lang_words = lang_words.withColumn(
         f"_hits_{lang}", F.size(F.filter("_lw", is_stopword(stop))) + 2 * letters)
 
