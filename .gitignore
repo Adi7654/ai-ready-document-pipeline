@@ -1,0 +1,18 @@
+# Raw MLSUM data: non-commercial license and too large for GitHub
+data/raw/*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+
+# Secrets / local config
+.env
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
