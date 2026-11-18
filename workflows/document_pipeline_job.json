@@ -1,0 +1,44 @@
+{
+  "name": "document_pipeline",
+  "description": "Bronze ingest -> silver clean/dedup/language -> silver PII masking -> gold chunks. Each notebook raises on a failed blocking check, which stops the downstream tasks.",
+  "tags": { "project": "ai-ready-document-pipeline" },
+  "max_concurrent_runs": 1,
+  "timeout_seconds": 7200,
+  "email_notifications": {
+    "on_failure": ["<your-email>"],
+    "no_alert_for_skipped_runs": true
+  },
+  "schedule": {
+    "quartz_cron_expression": "0 0 10 ? * MON",
+    "timezone_id": "America/New_York",
+    "pause_status": "UNPAUSED"
+  },
+  "tasks": [
+    {
+      "task_key": "bronze_ingest",
+      "notebook_task": { "notebook_path": "/Workspace/Users/<your-user>/ai-ready-document-pipeline/notebooks/01_bronze_ingest" },
+      "max_retries": 1,
+      "min_retry_interval_millis": 300000
+    },
+    {
+      "task_key": "silver_clean",
+      "depends_on": [{ "task_key": "bronze_ingest" }],
+      "notebook_task": { "notebook_path": "/Workspace/Users/<your-user>/ai-ready-document-pipeline/notebooks/02_silver_clean" },
+      "max_retries": 1,
+      "min_retry_interval_millis": 300000
+    },
+    {
+      "task_key": "silver_pii",
+      "depends_on": [{ "task_key": "silver_clean" }],
+      "notebook_task": { "notebook_path": "/Workspace/Users/<your-user>/ai-ready-document-pipeline/notebooks/03_silver_pii" },
+      "max_retries": 1,
+      "min_retry_interval_millis": 300000
+    },
+    {
+      "task_key": "gold_chunks",
+      "depends_on": [{ "task_key": "silver_pii" }],
+      "notebook_task": { "notebook_path": "/Workspace/Users/<your-user>/ai-ready-document-pipeline/notebooks/04_gold_chunks" },
+      "max_retries": 0
+    }
+  ]
+}

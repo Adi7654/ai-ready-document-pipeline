@@ -24,9 +24,14 @@ MLSUM .jsonl files ──► Unity Catalog Volume (landing zone)
                             │                 residual check (blocking) + LLM audit with ai_mask()
                             ▼
                    docs_silver.articles_masked  +  pii_summary  +  pii_audit
-                            │  TODO: chunking
+                            │  04_gold_chunks: sentence-aligned chunks with overlap, 5 blocking checks, MERGE
                             ▼
-                   docs_gold.*            (chunks + embeddings) ──► vector search ──► RAG
+                   docs_gold.chunks       (40,975 chunks)  +  chunk_summary
+                            │  TODO: embeddings
+                            ▼
+                   vector search ──► RAG
+
+  All four notebooks run as one Databricks Workflow (document_pipeline): weekly, retries, failure email.
 ```
 
 ## Dataset
@@ -128,7 +133,41 @@ No IPs or IBANs appeared in the data. **Residual check: 0 hits (passed).**
 ![PII summary](docs/pii_summary.png)
 ![PII audit](docs/pii_audit.png)
 
-### Gold: chunks and embeddings
+### Gold: chunks
+`04_gold_chunks` splits the 9,722 masked articles into **40,975 chunks**: the unit that gets embedded and handed to the LLM. Each chunk keeps its `doc_id`, position, **language** (the detected one, so the 34 English articles are searchable as English), **source newspaper**, title, URL and date.
+
+| Rule | Value | Why |
+|---|---|---|
+| Split on | Paragraphs, then sentences | A chunk never cuts a sentence in half |
+| Size | ~150 words, hard cap 220 | Fits multilingual embedding models (~512 tokens) and stays on one topic |
+| Overlap | Up to 30 words, whole sentences only | A fact on a chunk boundary is still found |
+| Very long sentence | Cut on words to fill the chunk | No tiny chunks next to a 200-word sentence |
+| Short tail | Merged into the previous chunk | No meaningless 5-word chunks at the end |
+
+**Results**
+
+| Language | Source | Articles | Chunks | Chunks / article | Avg. words |
+|---|---|---|---|---|---|
+| German (de) | Süddeutsche Zeitung | 2,098 | 7,975 | 3.8 | 151 |
+| English (en) | El País (English edition) | 34 | 184 | 5.4 | 156 |
+| Spanish (es) | El País | 2,021 | 10,349 | 5.1 | 157 |
+| French (fr) | Le Monde | 2,087 | 8,603 | 4.1 | 156 |
+| Russian (ru) | Moskovsky Komsomolets | 1,507 | 10,662 | 7.1 | 154 |
+| Turkish (tr) | Internet Haber | 1,975 | 3,202 | 1.6 | 129 |
+| **Total** | | **9,722** | **40,975** | **4.2** | |
+
+- **Article length drives the index, not article count.** Russian has the fewest articles but the most chunks (7.1 per article), while Turkish articles mostly fit in one or two chunks. Without that adjustment, Russian would dominate search results by volume; Session 6 counts *articles*, not chunks, when it compares coverage between languages.
+- **5 blocking checks run before anything is written:** every article has chunks, no empty chunks, none over 220 words, no broken `[PLACEHOLDER]`, and **no text lost**: for every article, the chunks minus their overlap add up to exactly its word count. All 5 passed.
+- **Written with MERGE on `chunk_id`** (hash of `doc_id` + position), with a `chunk_hash` per chunk. The first run inserted 40,975 rows; the scheduled Workflow rerun on unchanged data inserted, updated and deleted **0**, so the next step only embeds chunks that are new or changed.
+
+![Chunk summary](docs/chunk_summary.png)
+
+### Orchestration
+The four notebooks run as one Databricks Workflow, `document_pipeline`: `bronze_ingest → silver_clean → silver_pii → gold_chunks`, weekly on Mondays, with an email on failure. Tasks 1–3 retry once after 5 minutes (`silver_pii` downloads a model, a network step); `gold_chunks` has no retry, because its failures come from quality checks and would fail again. A failed check raises an error, so downstream tasks never run on bad data. **First full run: 11 min 29 s, all 4 tasks succeeded** (bronze 8m 10s including serverless start-up, silver 38s, PII 1m 59s, chunks 38s). The job definition is in [`workflows/document_pipeline_job.json`](workflows/document_pipeline_job.json).
+
+![Workflow run](docs/workflow_run.png)
+
+### Gold: embeddings and RAG
 _TODO_
 
 ## Design Decisions
@@ -144,12 +183,17 @@ _TODO_
 - **spaCy loaded once per partition with `mapInPandas`:** runs a Python NLP model at Spark scale without loading it per row.
 - **A blocking check plus a measured audit:** deterministic PII must be 0 or the job fails; fuzzy PII (names) gets an independent miss rate instead of a guess.
 - **`ai_mask` as an auditor, not the masker:** it's rate-limited on this tier, so it checks a sample rather than processing all 9,722 articles.
+- **Sentence-aligned chunks with overlap:** retrieval returns complete thoughts, and boundary facts aren't lost.
+- **Quality checks before the write, not after:** a bad run never reaches gold.
+- **MERGE + `chunk_hash` instead of overwrite:** reruns are idempotent (verified: rerun = 0 rows changed) and the expensive embedding step stays incremental.
+- **Detected language on every chunk:** search filters use the language the text is really in, and the newspaper is kept for per-outlet comparisons.
 - _TODO: add more as built_
 
 ## Repository Structure
 ```
 ├── data/raw/      # place MLSUM .jsonl files here (not committed; see How to run)
-├── notebooks/     # Databricks notebooks
+├── notebooks/     # Databricks notebooks (00–04)
+├── workflows/     # Databricks Workflow (job) definition
 └── docs/          # architecture diagram, screenshots
 ```
 
@@ -157,7 +201,7 @@ _TODO_
 1. Create a [Databricks Free Edition](https://www.databricks.com/learn/free-edition) workspace.
 2. Download the MLSUM files `de_val`, `es_val`, `fr_val`, `tu_val`, `ru_val` and `ru_test` (`.jsonl`) from the [MLSUM repository](https://github.com/recitalAI/MLSUM).
 3. Run `00_setup`, then upload the files to the landing folder it prints.
-4. Run `01_bronze_ingest`, `02_silver_clean`, then `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub).
+4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub) and `04_gold_chunks`, or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
 
 ## Author
 **Aditya Raj**: [LinkedIn](https://linkedin.com/in/aditya-raj-5a1a6a21b)
