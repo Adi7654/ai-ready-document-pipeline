@@ -27,11 +27,14 @@ MLSUM .jsonl files ──► Unity Catalog Volume (landing zone)
                             │  04_gold_chunks: sentence-aligned chunks with overlap, 5 blocking checks, MERGE
                             ▼
                    docs_gold.chunks       (40,975 chunks)  +  chunk_summary
-                            │  TODO: embeddings
+                            │  05_gold_embeddings: multilingual embeddings (Qwen3, 1,024 dims), only new/changed chunks
                             ▼
-                   vector search ──► RAG
+                   docs_gold.chunk_vectors ──► Vector Search index docs_gold.chunk_index
+                            │  TODO: RAG
+                            ▼
+                   cross-language search ──► LLM answer with sources
 
-  All four notebooks run as one Databricks Workflow (document_pipeline): weekly, retries, failure email.
+  All five notebooks run as one Databricks Workflow (document_pipeline): weekly, retries, failure email.
 ```
 
 ## Dataset
@@ -163,11 +166,48 @@ No IPs or IBANs appeared in the data. **Residual check: 0 hits (passed).**
 ![Chunk summary](docs/chunk_summary.png)
 
 ### Orchestration
-The four notebooks run as one Databricks Workflow, `document_pipeline`: `bronze_ingest → silver_clean → silver_pii → gold_chunks`, weekly on Mondays, with an email on failure. Tasks 1–3 retry once after 5 minutes (`silver_pii` downloads a model, a network step); `gold_chunks` has no retry, because its failures come from quality checks and would fail again. A failed check raises an error, so downstream tasks never run on bad data. **First full run: 11 min 29 s, all 4 tasks succeeded** (bronze 8m 10s including serverless start-up, silver 38s, PII 1m 59s, chunks 38s). The job definition is in [`workflows/document_pipeline_job.json`](workflows/document_pipeline_job.json).
+The five notebooks run as one Databricks Workflow, `document_pipeline`: `bronze_ingest → silver_clean → silver_pii → gold_chunks → gold_embeddings`, weekly on Mondays, with an email on failure. Tasks 1–3 and `gold_embeddings` retry once after 5 minutes (they depend on network steps: a model download, the embedding endpoint, Vector Search); `gold_chunks` has no retry, because its failures come from quality checks and would fail again. A failed check raises an error, so downstream tasks never run on bad data. **First full run: 11 min 29 s** (4 tasks, bronze 8m 10s including serverless start-up). **With embeddings added: 5 min 12 s for all 5 tasks**, because the embedding step only processes what changed. The job definition is in [`workflows/document_pipeline_job.json`](workflows/document_pipeline_job.json).
 
 ![Workflow run](docs/workflow_run.png)
 
-### Gold: embeddings and RAG
+### Gold: embeddings and vector search
+`05_gold_embeddings` turns every chunk (title + text) into a **1,024-number meaning vector** and serves them through a **Databricks Vector Search** index, so a question in one language finds articles in all five.
+
+**Choosing the model: measured, not guessed.** Two capability-check notebooks ([`notebooks/checks/`](notebooks/checks/)) compared the options on Free Edition:
+
+| | `multilingual-e5-small` (open model on our CPU) | **`databricks-qwen3-embedding-0-6b`** (Databricks-hosted) |
+|---|---|---|
+| English question vs. the same Notre-Dame sentence in de/es/fr/ru/tr and 2 unrelated ones | Lowest on-topic 0.779 vs highest off-topic 0.708 → margin **+0.07** | 0.428 vs 0.120 → margin **+0.31** (4× clearer) |
+| Speed | 3.8 chunks/s on the driver; workers couldn't reach Hugging Face, and from a Volume still under 7/s → **1.5+ hours** | **127 chunks/s → about 5 minutes** |
+| Runs outside Databricks (for the public site) | Yes | Yes: open weights (Qwen3-Embedding-0.6B), and the site only has to embed the short question |
+
+**Results**
+
+| Step | Result |
+|---|---|
+| Embedding | **40,975 chunks in 99 s, 0 failures** (`ai_query` with `failOnError => false`, failed rows retried once) |
+| Blocking checks | Every chunk has one vector of 1,024 numbers; no NaN; vectors = chunks; labels match chunks |
+| Write | MERGE into `docs_gold.chunk_vectors` (Change Data Feed on) |
+| Index | Delta Sync index, self-managed embeddings, triggered sync. First build ~22 min; later syncs only process changed rows |
+
+**Incremental by design, and proven by a real bug.** An outdated silver notebook in the Workflow had dropped English detection, relabelling the 184 English chunks as Spanish (168) and Turkish (16). After the fix, the rerun **updated exactly 184 chunks and re-embedded 0**: their text hadn't changed, so only their labels needed syncing. The first version of this notebook didn't sync labels without re-embedding, so the index briefly kept the wrong language filter values; it now does, and a **"labels match chunks"** check fails the job if they ever drift.
+
+**First test searches: what they revealed**
+
+| English question | Languages in the top 20 |
+|---|---|
+| Brexit negotiations between the UK and the European Union | de 15, fr 3, es 2 |
+| refugees crossing the Mediterranean Sea | de 10, es 7, fr 3 |
+| football World Cup results | de 18, es 1, tr 1 |
+
+Cross-language search works (German, Spanish and French articles answer an English question), but three problems showed up, and they shape the RAG step:
+1. **Language bias:** Russian and Turkish rarely reach a global top 20, because an English question scores higher against Latin-script languages (the capability check showed it too: Russian 0.43 vs ~0.63 for the others). Fix: search **each language separately**, then combine.
+2. **Duplicate articles:** one Russian article filled 3 of the top 5 places with different chunks. Fix: **group by article** (`doc_id`) and keep its best chunk.
+3. **Closest isn't always relevant:** Russian-only results for the refugee question were about people fleeing *to Russia*, and the top "football" hit was a handball score. Fix: a **minimum relevance score**, so an outlet with no real coverage is reported as "no coverage found".
+
+![Search results](docs/search_results.png)
+
+### RAG search
 _TODO_
 
 ## Design Decisions
@@ -187,12 +227,16 @@ _TODO_
 - **Quality checks before the write, not after:** a bad run never reaches gold.
 - **MERGE + `chunk_hash` instead of overwrite:** reruns are idempotent (verified: rerun = 0 rows changed) and the expensive embedding step stays incremental.
 - **Detected language on every chunk:** search filters use the language the text is really in, and the newspaper is kept for per-outlet comparisons.
+- **Embedding model chosen by a measured test:** cross-language margin and throughput on the real platform, not a leaderboard.
+- **Hosted embeddings for the bulk job, open weights for the website:** fast batch embedding in Databricks; the same model can embed questions anywhere.
+- **Re-embed by `chunk_hash`, sync labels separately:** text changes cost an embedding call; label fixes cost nothing.
+- **Delta Sync index with Change Data Feed:** the index follows the table and only processes changed rows.
 - _TODO: add more as built_
 
 ## Repository Structure
 ```
 ├── data/raw/      # place MLSUM .jsonl files here (not committed; see How to run)
-├── notebooks/     # Databricks notebooks (00–04)
+├── notebooks/     # Databricks notebooks (00–05); checks/ = one-off capability tests
 ├── workflows/     # Databricks Workflow (job) definition
 └── docs/          # architecture diagram, screenshots
 ```
@@ -201,7 +245,7 @@ _TODO_
 1. Create a [Databricks Free Edition](https://www.databricks.com/learn/free-edition) workspace.
 2. Download the MLSUM files `de_val`, `es_val`, `fr_val`, `tu_val`, `ru_val` and `ru_test` (`.jsonl`) from the [MLSUM repository](https://github.com/recitalAI/MLSUM).
 3. Run `00_setup`, then upload the files to the landing folder it prints.
-4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub) and `04_gold_chunks`, or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
+4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub), `04_gold_chunks` and `05_gold_embeddings` (creates the Vector Search endpoint `docs_vs_endpoint` on its first run), or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
 
 ## Author
 **Aditya Raj**: [LinkedIn](https://linkedin.com/in/aditya-raj-5a1a6a21b)
