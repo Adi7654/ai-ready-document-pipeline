@@ -30,9 +30,9 @@ MLSUM .jsonl files ──► Unity Catalog Volume (landing zone)
                             │  05_gold_embeddings: multilingual embeddings (Qwen3, 1,024 dims), only new/changed chunks
                             ▼
                    docs_gold.chunk_vectors ──► Vector Search index docs_gold.chunk_index
-                            │  TODO: RAG
+                            │  06_rag_search: per-newspaper retrieval → LLM relevance check → summaries + comparison
                             ▼
-                   cross-language search ──► LLM answer with sources
+                   English answer: coverage per newspaper, summaries with sources  (logged to rag_log)
 
   All five notebooks run as one Databricks Workflow (document_pipeline): weekly, retries, failure email.
 ```
@@ -207,8 +207,42 @@ Cross-language search works (German, Spanish and French articles answer an Engli
 
 ![Search results](docs/search_results.png)
 
-### RAG search
-_TODO_
+### RAG search: how did each newspaper cover it?
+`06_rag_search` answers an English question by comparing how all six sources covered it, using **only retrieved text**:
+
+1. **Retrieve per newspaper.** One filtered vector search per language instead of one global top 20 (fixes the language bias).
+2. **Group by article.** The best-scoring chunk per article; its two best chunks form the excerpt (fixes duplicates).
+3. **Check relevance.** A similarity floor (0.35), then Llama 3.3 70B answers YES/NO: *is this article about the question?* An outlet with no YES is reported as **"No relevant coverage found"** rather than padded with loosely related text.
+4. **Coverage table.** Relevant articles per newspaper and their share of that newspaper's articles.
+5. **Summaries.** One English summary per newspaper, citing its excerpts as [1]–[3], then one comparison: answer, agreement, differences. `[PERSON]` placeholders stay masked; the prompt forbids guessing names.
+6. **Log.** Question, coverage, summaries, sources and timing go to `docs_gold.rag_log`.
+
+**Example questions (all asked in English)**
+
+| Question | Newspapers with relevant coverage | Notable |
+|---|---|---|
+| How did the Brexit negotiations between the UK and the EU develop? | **All 6** | Session 5's plain search for Brexit returned only German, French and Spanish; now Moskovsky Komsomolets (no-deal shortage forecasts) and Internet Haber (the 318–310 Commons vote) are included |
+| What happened to refugees and migrants crossing the Mediterranean Sea? | 5 of 6 | **Moskovsky Komsomolets: no relevant coverage**. In Session 5 its closest articles were about people fleeing *to Russia*; the relevance check now rejects them |
+| What is the relationship between Russia and Turkey? | 4 of 6 | Strongest coverage in the Russian and Turkish papers (S-400 purchase, Syria, the Golan Heights statement); El País had none |
+
+![RAG answer](docs/rag_answer.png)
+
+**Evaluation: measuring the fix.** For 4 random articles per language, the LLM wrote an English question each article answers (paraphrased, not copied). Retrieval then had to find that exact article:
+
+| Language | Global search hit@5 | **Per-newspaper hit@5** | Per-newspaper hit@1 | Relevance check kept it |
+|---|---|---|---|---|
+| German | 75% | 75% | 25% | 100% |
+| Spanish | 100% | 100% | 75% | 100% |
+| French | 75% | **100%** | 75% | 100% |
+| Russian | 100% | 100% | 100% | 75% |
+| Turkish | 25% | **75%** | 25% | 67% |
+| **All 20** | **75%** | **90%** | **60%** | **89%** |
+
+- **Per-newspaper retrieval lifts hit@5 from 75% to 90%**, and Turkish from 25% to 75%. Specific questions (a named place or person) were already found globally, including Russian ones; the bias hits **broad topics** and **Turkish** hardest, which is exactly where cross-outlet comparison needs it.
+- **The relevance check is slightly strict:** it kept the right article 89% of the time (16 of 18 retrieved), rejecting one Russian and one Turkish article that were correct. That trade-off favours "no coverage" over off-topic summaries.
+- **Limits:** 20 questions is a small sample, and questions generated from an article's opening are easier than real user questions. It is a regression check, not a benchmark; the results are stored in `docs_gold.rag_eval` so later changes can be compared.
+
+![RAG evaluation](docs/rag_eval.png)
 
 ## Design Decisions
 - **Deterministic sampling instead of `sample()`:** reproducible results, so metrics stay comparable between runs.
@@ -231,12 +265,16 @@ _TODO_
 - **Hosted embeddings for the bulk job, open weights for the website:** fast batch embedding in Databricks; the same model can embed questions anywhere.
 - **Re-embed by `chunk_hash`, sync labels separately:** text changes cost an embedding call; label fixes cost nothing.
 - **Delta Sync index with Change Data Feed:** the index follows the table and only processes changed rows.
+- **Retrieve per newspaper, then compare:** fair coverage across outlets of different sizes and scripts, instead of one ranked list that hides whole languages.
+- **LLM as a relevance gate before generation:** the answer is built only from articles that passed, and "no coverage" is a valid result.
+- **Answers grounded and logged:** summaries cite numbered excerpts, and every question is stored with its sources in `rag_log`.
+- **A small automatic evaluation set:** retrieval changes are judged by hit@k and judge recall, not by eye.
 - _TODO: add more as built_
 
 ## Repository Structure
 ```
 ├── data/raw/      # place MLSUM .jsonl files here (not committed; see How to run)
-├── notebooks/     # Databricks notebooks (00–05); checks/ = one-off capability tests
+├── notebooks/     # Databricks notebooks (00–06); checks/ = one-off capability tests
 ├── workflows/     # Databricks Workflow (job) definition
 └── docs/          # architecture diagram, screenshots
 ```
@@ -245,7 +283,7 @@ _TODO_
 1. Create a [Databricks Free Edition](https://www.databricks.com/learn/free-edition) workspace.
 2. Download the MLSUM files `de_val`, `es_val`, `fr_val`, `tu_val`, `ru_val` and `ru_test` (`.jsonl`) from the [MLSUM repository](https://github.com/recitalAI/MLSUM).
 3. Run `00_setup`, then upload the files to the landing folder it prints.
-4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub), `04_gold_chunks` and `05_gold_embeddings` (creates the Vector Search endpoint `docs_vs_endpoint` on its first run), or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
+4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub), `04_gold_chunks` and `05_gold_embeddings` (creates the Vector Search endpoint `docs_vs_endpoint` on its first run), then open `06_rag_search` to ask questions, or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
 
 ## Author
 **Aditya Raj**: [LinkedIn](https://linkedin.com/in/aditya-raj-5a1a6a21b)
