@@ -225,7 +225,8 @@ Cross-language search works (German, Spanish and French articles answer an Engli
 | What happened to refugees and migrants crossing the Mediterranean Sea? | 5 of 6 | **Moskovsky Komsomolets: no relevant coverage**. In Session 5 its closest articles were about people fleeing *to Russia*; the relevance check now rejects them |
 | What is the relationship between Russia and Turkey? | 4 of 6 | Strongest coverage in the Russian and Turkish papers (S-400 purchase, Syria, the Golan Heights statement); El País had none |
 
-![RAG answer](docs/rag_answer.png)
+![RAG answer: comparison](docs/rag_answer.png)
+![RAG answer: summaries per newspaper](docs/rag_answer_2.png)
 
 **Evaluation: measuring the fix.** For 4 random articles per language, the LLM wrote an English question each article answers (paraphrased, not copied). Retrieval then had to find that exact article:
 
