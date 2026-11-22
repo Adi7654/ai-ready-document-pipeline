@@ -258,12 +258,12 @@ Cross-language search works (German, Spanish and French articles answer an Engli
 | **"Same story in other newspapers":** for each article, its closest articles in every other language | Article vector = mean of its chunk vectors; cosine similarity across all 9,722 articles (5 s in numpy) |
 
 **Two measured fixes before publishing**
-- **LLM translations altered the PII placeholders in 27% of headlines** (2,639 of 9,722): inventing `[PERSON]` for brands ("Who's Afraid of [PERSON]?" for *Huawei*) or dropping one. A rule now requires a translation to contain exactly the original's placeholders; failures get a stricter retry, and if that fails the original headline is kept. Result: **0 mismatches**, 1 headline left untranslated.
+- **LLM translations altered the PII placeholders in about 30% of headlines.** The first check found 2,639 of 9,722 (27%) inventing `[PERSON]` for brands ("Who's Afraid of [PERSON]?" for *Huawei*) or dropping one. A broader check, comparing *any* bracketed capitals, then caught 286 more with invented tokens such as `[REGION]` for *Kashmir*. A translation must now contain exactly the original's placeholders; failures get a stricter retry, and if that fails the original headline is kept. Result: **0 mismatches**, 3 headlines left untranslated.
 - **The first "same story" threshold (0.50) linked 7,941 articles**, mostly to unrelated or same-topic pieces. Reading sample pairs per score band showed 0.55–0.65 = unrelated or same broad topic, 0.65–0.70 = sometimes the same event, 0.83+ = the same story. The site now shows **"Same story" at ≥ 0.75 (260 articles)** and **"Related coverage" at 0.67–0.75 (1,116 articles in total with any link)**.
 
 An e-mail check on all published snippets also flagged `CC@2.0`, a photo licence credit; the check was tightened to require a real top-level domain rather than loosened until it passed.
 
-**What is published:** headlines, ~35-word snippets and links to the original articles, all after PII masking. MLSUM is licensed for non-commercial research. Known gap: the NER model missed some names in headlines, such as the inflected Russian form of *Nazarbayev* and a Turkish TV host's name, consistent with the 21 misses the Session 3 audit measured.
+**What is published:** headlines, ~35-word snippets and links to the original articles, all after PII masking. MLSUM is licensed for non-commercial research. Known gaps of the small NER model, in both directions: it **missed** some names in headlines (the inflected Russian form of *Nazarbayev*, a Turkish TV host, sometimes *Modi*), consistent with the 21 misses the Session 3 audit measured; and it **over-masks** some capitalised non-names (*"500 [PERSON] d'Indianapolis"* for *500 Miles*, a cyclone's name). It also masks public figures, so headlines can read "Prime Minister [PERSON]". A natural next step is an allow-list of public office holders applied before masking.
 
 ![Website](docs/website.png)
 

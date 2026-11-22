@@ -287,11 +287,16 @@
         const hay = (a.e + " " + a.t + " " + (a.p || "")).toLowerCase();
         return tokens.every((t) => hay.includes(t));
       });
-      list.sort((x, y) => {
-        const hx = tokens.every((t) => (x.e + " " + x.t).toLowerCase().includes(t)) ? 1 : 0;
-        const hy = tokens.every((t) => (y.e + " " + y.t).toLowerCase().includes(t)) ? 1 : 0;
-        return (hy - hx) || (matchesCount(y) - matchesCount(x)) || (y.d || "").localeCompare(x.d || "");
-      });
+      // rank: whole words in the headline (India, Indian) > partial words (Indianapolis) > snippet only
+      const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const word = tokens.map((t) => new RegExp("(^|[^\\p{L}])" + esc(t) + "(s|n|ns|ese)?($|[^\\p{L}])", "iu"));
+      const rank = (a) => {
+        const head = a.e + " " + a.t;
+        if (word.every((r) => r.test(head))) return 2;
+        return tokens.every((t) => head.toLowerCase().includes(t)) ? 1 : 0;
+      };
+      list.forEach((a) => { a._r = rank(a); });
+      list.sort((x, y) => (y._r - x._r) || (matchesCount(y) - matchesCount(x)) || (y.d || "").localeCompare(x.d || ""));
     } else {
       list.sort((x, y) => (bestScore(y) - bestScore(x)) || (y.d || "").localeCompare(x.d || ""));
     }

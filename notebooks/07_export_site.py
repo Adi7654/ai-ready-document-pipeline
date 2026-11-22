@@ -35,7 +35,7 @@ NEIGHBOURS_PER_LANGUAGE = 3
 # 0.55–0.65 = unrelated or same broad topic; 0.65–0.70 = sometimes the same event; 0.83+ = the same story
 SAME_STORY_SCORE = 0.75      # shown as "Same story"
 NEIGHBOUR_MIN_SCORE = 0.67   # 0.67–0.75 shown as "Related coverage"; below is not published
-PLACEHOLDER = r"\[(?:PERSON|EMAIL|PHONE|URL|IP|IBAN)\]"
+PLACEHOLDER = r"\[[A-Z][A-Z_]*\]"   # any bracketed capitals, so invented ones like [REGION] are caught too
 
 LANGUAGES = ["de", "es", "fr", "ru", "tr", "en"]
 LANGUAGE_NAMES = {"de": "German", "es": "Spanish", "fr": "French", "ru": "Russian", "tr": "Turkish", "en": "English"}
