@@ -33,6 +33,9 @@ MLSUM .jsonl files ──► Unity Catalog Volume (landing zone)
                             │  06_rag_search: per-newspaper retrieval → LLM relevance check → summaries + comparison
                             ▼
                    English answer: coverage per newspaper, summaries with sources  (logged to rag_log)
+                            │  07_export_site: English headlines, cross-language "same story" links, featured answers → JSON
+                            ▼
+                   Public website (GitHub Pages, static): docs/index.html + docs/data/*.json
 
   All five notebooks run as one Databricks Workflow (document_pipeline): weekly, retries, failure email.
 ```
@@ -245,6 +248,25 @@ Cross-language search works (German, Spanish and French articles answer an Engli
 
 ![RAG evaluation](docs/rag_eval.png)
 
+### Public website
+**Live: [adi7654.github.io/ai-ready-document-pipeline](https://adi7654.github.io/ai-ready-document-pipeline/)**: a static site on GitHub Pages, with no server, model or API key behind it. `07_export_site` prepares everything in Databricks:
+
+| On the site | Made by |
+|---|---|
+| **Featured questions:** 13 full RAG answers (coverage per newspaper, English summaries with sources, agreement and differences) | Latest answer per question from `docs_gold.rag_log` |
+| **Explore articles:** search all 9,722 headlines in English, filter by newspaper | Headlines translated once by Llama 3.3 (3.6 min), stored in `docs_gold.article_titles_en`, retranslated only when a title changes |
+| **"Same story in other newspapers":** for each article, its closest articles in every other language | Article vector = mean of its chunk vectors; cosine similarity across all 9,722 articles (5 s in numpy) |
+
+**Two measured fixes before publishing**
+- **LLM translations altered the PII placeholders in 27% of headlines** (2,639 of 9,722): inventing `[PERSON]` for brands ("Who's Afraid of [PERSON]?" for *Huawei*) or dropping one. A rule now requires a translation to contain exactly the original's placeholders; failures get a stricter retry, and if that fails the original headline is kept. Result: **0 mismatches**, 1 headline left untranslated.
+- **The first "same story" threshold (0.50) linked 7,941 articles**, mostly to unrelated or same-topic pieces. Reading sample pairs per score band showed 0.55–0.65 = unrelated or same broad topic, 0.65–0.70 = sometimes the same event, 0.83+ = the same story. The site now shows **"Same story" at ≥ 0.75 (260 articles)** and **"Related coverage" at 0.67–0.75 (1,116 articles in total with any link)**.
+
+An e-mail check on all published snippets also flagged `CC@2.0`, a photo licence credit; the check was tightened to require a real top-level domain rather than loosened until it passed.
+
+**What is published:** headlines, ~35-word snippets and links to the original articles, all after PII masking. MLSUM is licensed for non-commercial research. Known gap: the NER model missed some names in headlines, such as the inflected Russian form of *Nazarbayev* and a Turkish TV host's name, consistent with the 21 misses the Session 3 audit measured.
+
+![Website](docs/website.png)
+
 ## Design Decisions
 - **Deterministic sampling instead of `sample()`:** reproducible results, so metrics stay comparable between runs.
 - **`doc_id` from a hash of the URL:** a stable key that survives re-ingestion and links every chunk back to its source article.
@@ -270,21 +292,24 @@ Cross-language search works (German, Spanish and French articles answer an Engli
 - **LLM as a relevance gate before generation:** the answer is built only from articles that passed, and "no coverage" is a valid result.
 - **Answers grounded and logged:** summaries cite numbered excerpts, and every question is stored with its sources in `rag_log`.
 - **A small automatic evaluation set:** retrieval changes are judged by hit@k and judge recall, not by eye.
+- **Static site from exported data:** free, permanent and safe to share; Databricks does the heavy work once, and the browser only filters and displays.
+- **Validate LLM output against the source:** placeholders, links and e-mail patterns are checked before anything is published.
+- **Thresholds set by reading samples, not by guessing:** score bands were inspected before choosing "same story" and "related".
 - _TODO: add more as built_
 
 ## Repository Structure
 ```
 ├── data/raw/      # place MLSUM .jsonl files here (not committed; see How to run)
-├── notebooks/     # Databricks notebooks (00–06); checks/ = one-off capability tests
+├── notebooks/     # Databricks notebooks (00–07); checks/ = one-off capability tests
 ├── workflows/     # Databricks Workflow (job) definition
-└── docs/          # architecture diagram, screenshots
+└── docs/          # screenshots + the public website (index.html, data/*.json)
 ```
 
 ## How to Run
 1. Create a [Databricks Free Edition](https://www.databricks.com/learn/free-edition) workspace.
 2. Download the MLSUM files `de_val`, `es_val`, `fr_val`, `tu_val`, `ru_val` and `ru_test` (`.jsonl`) from the [MLSUM repository](https://github.com/recitalAI/MLSUM).
 3. Run `00_setup`, then upload the files to the landing folder it prints.
-4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub), `04_gold_chunks` and `05_gold_embeddings` (creates the Vector Search endpoint `docs_vs_endpoint` on its first run), then open `06_rag_search` to ask questions, or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
+4. Run `01_bronze_ingest`, `02_silver_clean`, `03_silver_pii` (installs spaCy and its multilingual model from PyPI/GitHub), `04_gold_chunks` and `05_gold_embeddings` (creates the Vector Search endpoint `docs_vs_endpoint` on its first run), then open `06_rag_search` to ask questions and `07_export_site` to rebuild the website data, or create the Workflow from `workflows/document_pipeline_job.json` (replace `<your-user>` and `<your-email>`) and run it.
 
 ## Author
 **Aditya Raj**: [LinkedIn](https://linkedin.com/in/aditya-raj-5a1a6a21b)

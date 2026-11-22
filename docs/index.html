@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Five Newspapers, One Story · Multilingual News RAG</title>
+<meta name="description" content="Compare how five European newspapers covered the same events, in English. A Databricks RAG pipeline over 9,722 multilingual news articles.">
+<style>
+  :root {
+    --bg: #f6f5f1; --paper: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #e3e1d8;
+    --accent: #b4441f; --accent-soft: #f6e4dc; --ok: #2f6b4f; --ok-soft: #e1efe7; --warn-soft: #f3efe2;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
+  a { color: var(--accent); }
+  header { background: var(--paper); border-bottom: 1px solid var(--line); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  .masthead { padding: 28px 0 18px; display: flex; gap: 24px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
+  h1 { font: 700 34px/1.1 var(--serif); margin: 0 0 6px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); max-width: 640px; margin: 0; }
+  .stats { display: flex; gap: 22px; font-size: 13px; color: var(--muted); }
+  .stats b { display: block; font: 700 22px/1.1 var(--serif); color: var(--ink); }
+  nav.tabs { display: flex; gap: 4px; }
+  nav.tabs button { border: 0; background: none; font: 600 14px var(--sans); color: var(--muted); padding: 12px 14px;
+                    border-bottom: 3px solid transparent; cursor: pointer; }
+  nav.tabs button.active { color: var(--ink); border-bottom-color: var(--accent); }
+  main.wrap { padding: 26px 20px 60px; }
+  .featured > *, .explore > * { min-width: 0; }
+  .tablewrap { overflow-x: auto; }
+  .hidden { display: none !important; }
+
+  /* Featured questions */
+  .featured { display: grid; grid-template-columns: 300px 1fr; gap: 24px; align-items: start; }
+  .qlist { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; position: sticky; top: 16px; }
+  .qlist h3 { margin: 0; padding: 12px 14px; font: 600 12px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .qlist button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none;
+                  padding: 11px 14px; font: 14px/1.4 var(--sans); color: var(--ink); cursor: pointer; }
+  .qlist button:last-child { border-bottom: 0; }
+  .qlist button:hover { background: var(--bg); }
+  .qlist button.active { background: var(--accent-soft); font-weight: 600; }
+  .qlist .n { float: right; color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 8px; }
+  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; margin-bottom: 18px; }
+  .card h2 { font: 700 24px/1.25 var(--serif); margin: 0 0 4px; }
+  .card h4 { font: 600 12px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+  .answer p { margin: 0 0 10px; }
+  .answer ul { margin: 0 0 10px; padding-left: 20px; }
+  .coverage { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .coverage th { text-align: left; font: 600 12px var(--sans); color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .coverage td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .coverage tr:last-child td { border-bottom: 0; }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; min-width: 120px; position: relative; }
+  .bar span { position: absolute; inset: 0 auto 0 0; background: var(--ok); border-radius: 4px; }
+  .bar.global span { background: var(--muted); }
+  .none { color: var(--muted); font-style: italic; }
+  .outlet { border-top: 1px solid var(--line); padding: 14px 0 4px; }
+  .outlet:first-of-type { border-top: 0; padding-top: 4px; }
+  .outlet .name { font-weight: 700; }
+  .outlet .lang { color: var(--muted); font-size: 13px; }
+  .outlet p { margin: 6px 0; }
+  .src { font-size: 13px; margin: 2px 0 2px 2px; color: var(--muted); }
+  .src a { color: var(--ink); }
+  .note { font-size: 13px; color: var(--muted); background: var(--warn-soft); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+
+  /* Explore */
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .toolbar input[type=search] { flex: 1 1 320px; font: 16px var(--sans); padding: 11px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 6px 12px; font: 13px var(--sans); cursor: pointer; color: var(--ink); }
+  .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  label.toggle { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .explore { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  .results { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .count { font-size: 13px; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .row { padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .row:hover { background: var(--bg); }
+  .row.active { background: var(--accent-soft); }
+  .row .meta { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .row .en { font-weight: 600; }
+  .row .orig { font-size: 13px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin-left: 6px; }
+  .badge.same { background: var(--ok-soft); color: var(--ok); }
+  .badge.rel { background: var(--warn-soft); color: #7a5b12; }
+  .detail { position: sticky; top: 16px; }
+  .detail .empty { color: var(--muted); }
+  .match { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+  .match:hover .t { text-decoration: underline; }
+  .match .score { font: 600 12px var(--sans); min-width: 44px; color: var(--muted); }
+  .more { display: block; width: 100%; border: 0; background: none; padding: 12px; color: var(--accent); font: 600 14px var(--sans); cursor: pointer; }
+  footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; padding: 22px 0 40px; }
+  @media (max-width: 860px) {
+    .featured, .explore { grid-template-columns: 1fr; }
+    .bar { min-width: 60px; }
+    .coverage th:nth-child(5), .coverage td:nth-child(5) { display: none; }
+    nav.tabs button { padding: 12px 8px; }
+    .qlist, .detail { position: static; }
+    h1 { font-size: 28px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="masthead">
+      <div>
+        <h1>Five newspapers, one story</h1>
+        <p class="lede">Ask in English, see how German, Spanish, French, Russian and Turkish newspapers covered the same events.
+          Answers come only from the articles, through a multilingual RAG pipeline built on Databricks.</p>
+      </div>
+      <div class="stats" id="stats"></div>
+    </div>
+    <nav class="tabs">
+      <button data-tab="questions" class="active">Featured questions</button>
+      <button data-tab="explore">Explore articles</button>
+      <button data-tab="about">How it works</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="tab-questions">
+    <div class="featured">
+      <div class="qlist" id="qlist"><h3>Questions</h3></div>
+      <div id="answer"><div class="card">Loading…</div></div>
+    </div>
+  </section>
+
+  <section id="tab-explore" class="hidden">
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search headlines in English, e.g. Brexit, Syria, Huawei, election…" autocomplete="off">
+      <label class="toggle"><input type="checkbox" id="multi"> Only stories covered by several newspapers</label>
+    </div>
+    <div class="toolbar"><div class="chips" id="langchips"></div></div>
+    <div class="explore">
+      <div class="results" id="results"><div class="count">Loading 9,722 articles…</div></div>
+      <div class="card detail" id="detail"><p class="empty">Select an article to see its snippet, a link to the original,
+        and how the other newspapers covered the same story.</p></div>
+    </div>
+  </section>
+
+  <section id="tab-about" class="hidden">
+    <div class="card">
+      <h2>How it works</h2>
+      <p>Every answer on this page was produced by a pipeline running in Databricks, then exported as static files:
+        there is no server behind this site.</p>
+      <ol>
+        <li><b>Bronze → silver:</b> 9,907 articles from the MLSUM dataset are cleaned, deduplicated (exact and MinHash near-duplicates),
+          language-checked and given parsed dates; 9,722 remain.</li>
+        <li><b>PII masking:</b> e-mails, URLs, phone numbers and person names are replaced with placeholders such as <code>[PERSON]</code>,
+          verified by a blocking residual check and an LLM audit.</li>
+        <li><b>Chunks and embeddings:</b> 40,975 sentence-aligned chunks, embedded with a multilingual model and indexed in Databricks Vector Search.</li>
+        <li><b>RAG:</b> each question is searched per newspaper, an LLM checks each article is really on topic, then summarises each newspaper in English and compares them.</li>
+        <li><b>This site:</b> headlines were translated to English once (with a check that rejected 27% of first-pass translations for altering the masking placeholders),
+          and "same story" links come from the similarity of article vectors across languages.</li>
+      </ol>
+      <p>Code, design decisions and measured results: <a href="https://github.com/Adi7654/ai-ready-document-pipeline">github.com/Adi7654/ai-ready-document-pipeline</a></p>
+      <h4>About the data</h4>
+      <p>Articles come from the <a href="https://github.com/ThomasScialom/MLSUM">MLSUM</a> research dataset (one newspaper per language, mostly 2018–2019).
+        It is licensed for non-commercial research; this site shows only headlines, short snippets and links to the original articles.
+        Personal names are masked automatically, so some public figures appear as <code>[PERSON]</code>, and a few names were missed by the model.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">Built by Aditya Raj · Databricks, PySpark, Delta Lake, Vector Search, Llama 3.3 · Data: MLSUM (non-commercial research) ·
+    <a href="https://github.com/Adi7654/ai-ready-document-pipeline">Source on GitHub</a></div>
+</footer>
+
+<script>
+(() => {
+  const LANGS = ["de", "es", "fr", "ru", "tr", "en"];
+  let META = null, ARTICLES = [], ANSWERS = [];
+  const $ = (s) => document.querySelector(s);
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") n.className = v; else if (k === "text") n.textContent = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+    }
+    for (const k of kids) if (k != null) n.append(k);
+    return n;
+  };
+  const srcName = (l) => (META && META.sources[l]) || l;
+  const langName = (l) => (META && META.language_names[l]) || l;
+  const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "#";
+
+  // Tabs
+  document.querySelectorAll("nav.tabs button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll("nav.tabs button").forEach((x) => x.classList.toggle("active", x === b));
+    ["questions", "explore", "about"].forEach((t) => $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
+  }));
+
+  // ---------- Featured questions ----------
+  function renderComparison(text) {
+    const box = el("div", { class: "answer" });
+    let list = null;
+    for (const raw of (text || "").split("\n")) {
+      const line = raw.trim();
+      if (!line) { list = null; continue; }
+      const bullet = line.match(/^[*\-•]\s+(.*)$/);
+      if (bullet) {
+        if (!list) { list = el("ul"); box.append(list); }
+        list.append(el("li", { text: bullet[1] }));
+        continue;
+      }
+      list = null;
+      const head = line.match(/^(Answer|Agreement|Differences)\s*:\s*(.*)$/i);
+      if (head) {
+        box.append(el("h4", { text: head[1] }));
+        if (head[2]) box.append(el("p", { text: head[2] }));
+      } else if (!/^Newspapers?\b.*:/i.test(line) && !/^The newspapers that covered/i.test(line)) {
+        box.append(el("p", { text: line }));
+      }
+    }
+    return box;
+  }
+
+  function showAnswer(i) {
+    const a = ANSWERS[i];
+    document.querySelectorAll("#qlist button").forEach((b, j) => b.classList.toggle("active", j === i));
+    const root = $("#answer");
+    root.replaceChildren();
+    const covered = a.coverage.filter((c) => c.relevant_articles !== "0").length;
+
+    const card = el("div", { class: "card" },
+      el("h2", { text: a.question }),
+      el("div", { class: "src", text: `${covered} of ${a.coverage.length} newspapers had relevant coverage · answered ${a.asked_at}` }),
+      renderComparison(a.comparison));
+    root.append(card);
+
+    // Coverage table
+    const maxRel = Math.max(1, ...a.coverage.map((c) => parseInt(c.relevant_articles, 10) || 0));
+    const maxGlob = Math.max(1, ...a.coverage.map((c) => c.in_global_top_20 || 0));
+    const tbody = el("tbody");
+    for (const c of a.coverage) {
+      const n = parseInt(c.relevant_articles, 10) || 0;
+      tbody.append(el("tr", {},
+        el("td", {}, el("b", { text: srcName(c.language) }), el("div", { class: "src", text: langName(c.language) })),
+        el("td", { text: c.relevant_articles }),
+        el("td", {}, el("div", { class: "bar" }, el("span", { style: `width:${(100 * n / maxRel).toFixed(0)}%` }))),
+        el("td", { text: `${(c.share_of_outlet_pct ?? 0).toFixed(2)}%` }),
+        el("td", {}, el("div", { class: "bar global", title: `${c.in_global_top_20 || 0} of the plain top 20` },
+          el("span", { style: `width:${(100 * (c.in_global_top_20 || 0) / maxGlob).toFixed(0)}%` })))));
+    }
+    root.append(el("div", { class: "card" },
+      el("h4", { text: "Coverage by newspaper" }),
+      el("div", { class: "tablewrap" }, el("table", { class: "coverage" },
+        el("thead", {}, el("tr", {}, ...["Newspaper", "Relevant articles", "", "Share of its articles", "Plain search top 20"].map((h) => el("th", { text: h })))),
+        tbody)),
+      el("div", { class: "note", text: "Relevant articles = the newspaper's closest articles that an LLM confirmed are about the question (up to 6 checked, so “6+” means at least 6). " +
+        "“Plain search top 20” is what one global vector search returns: it favours languages closer to English, which is why the search runs per newspaper." })));
+
+    // Summaries per newspaper
+    const outlets = el("div", { class: "card" }, el("h4", { text: "What each newspaper reported" }));
+    for (const l of LANGS) {
+      if (!a.coverage.some((c) => c.language === l)) continue;
+      const o = el("div", { class: "outlet" }, el("span", { class: "name", text: srcName(l) }), el("span", { class: "lang", text: ` · ${langName(l)}` }));
+      if (a.summaries[l]) {
+        o.append(el("p", { text: a.summaries[l] }));
+        for (const s of a.sources.filter((s) => s.language === l)) {
+          o.append(el("div", { class: "src" }, `[${s.n}] `, el("a", { href: safeUrl(s.url), target: "_blank", rel: "noopener", text: s.title })));
+        }
+      } else {
+        o.append(el("p", { class: "none", text: "No relevant coverage found." }));
+      }
+      outlets.append(o);
+    }
+    root.append(outlets);
+  }
+
+  // ---------- Explore ----------
+  const state = { q: "", langs: new Set(LANGS), multi: false, limit: 60, selected: null };
+
+  function matchesCount(a) { return Object.keys(a.n || {}).length; }
+  function sameStoryCount(a) {
+    return Object.values(a.n || {}).filter((lst) => lst.some(([, s]) => s >= META.same_story_score)).length;
+  }
+  function bestScore(a) { let b = 0; for (const lst of Object.values(a.n || {})) for (const [, s] of lst) b = Math.max(b, s); return b; }
+
+  function filtered() {
+    const tokens = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+    let list = ARTICLES.filter((a) => state.langs.has(a.l) && (!state.multi || matchesCount(a) > 0));
+    if (tokens.length) {
+      list = list.filter((a) => {
+        const hay = (a.e + " " + a.t + " " + (a.p || "")).toLowerCase();
+        return tokens.every((t) => hay.includes(t));
+      });
+      list.sort((x, y) => {
+        const hx = tokens.every((t) => (x.e + " " + x.t).toLowerCase().includes(t)) ? 1 : 0;
+        const hy = tokens.every((t) => (y.e + " " + y.t).toLowerCase().includes(t)) ? 1 : 0;
+        return (hy - hx) || (matchesCount(y) - matchesCount(x)) || (y.d || "").localeCompare(x.d || "");
+      });
+    } else {
+      list.sort((x, y) => (bestScore(y) - bestScore(x)) || (y.d || "").localeCompare(x.d || ""));
+    }
+    return list;
+  }
+
+  function badge(a) {
+    const b = bestScore(a);
+    if (META && b >= META.same_story_score) {
+      const n = sameStoryCount(a);
+      return el("span", { class: "badge same", text: `same story in ${n} other paper${n > 1 ? "s" : ""}` });
+    }
+    if (b > 0) return el("span", { class: "badge rel", text: "related coverage" });
+    return null;
+  }
+
+  function renderResults() {
+    const list = filtered();
+    const box = $("#results");
+    box.replaceChildren(el("div", { class: "count", text: `${list.length.toLocaleString()} articles` +
+      (state.q ? ` matching “${state.q}”` : " · strongest cross-newspaper matches first") }));
+    for (const a of list.slice(0, state.limit)) {
+      const row = el("div", { class: "row" + (state.selected === a.i ? " active" : ""), onclick: () => select(a.i) },
+        el("div", { class: "meta" }, `${srcName(a.l)} · ${a.d || "undated"}`, badge(a)),
+        el("div", { class: "en", text: a.e }),
+        a.l !== "en" ? el("div", { class: "orig", text: a.t }) : null);
+      box.append(row);
+    }
+    if (list.length > state.limit) box.append(el("button", { class: "more", onclick: () => { state.limit += 60; renderResults(); }, text: "Show more" }));
+  }
+
+  function select(i) {
+    state.selected = i;
+    const a = ARTICLES[i];
+    document.querySelectorAll(".row").forEach((r) => r.classList.remove("active"));
+    renderResults();
+    const d = $("#detail");
+    d.replaceChildren(
+      el("div", { class: "src", text: `${srcName(a.l)} · ${langName(a.l)} · ${a.d || "undated"}${a.c ? " · " + a.c : ""}` }),
+      el("h2", { text: a.e }),
+      a.l !== "en" ? el("div", { class: "orig", text: a.t }) : null,
+      el("p", { text: (a.p || "") + " …" }),
+      el("a", { href: safeUrl(a.u), target: "_blank", rel: "noopener", text: "Read the original article →" }));
+    const groups = Object.entries(a.n || {});
+    d.append(el("h4", { text: "Other newspapers" }));
+    if (!groups.length) { d.append(el("p", { class: "none", text: "No close match in the other newspapers (the story may be national, or covered differently)." })); return; }
+    const flat = groups.flatMap(([l, lst]) => lst.map(([j, s]) => ({ j, s, l }))).sort((x, y) => y.s - x.s);
+    for (const m of flat) {
+      const b = ARTICLES[m.j];
+      if (!b) continue;
+      d.append(el("div", { class: "match", onclick: () => select(m.j) },
+        el("div", { class: "score", text: m.s.toFixed(2) }),
+        el("div", {},
+          el("div", { class: "src" }, `${srcName(b.l)} · ${b.d || "undated"}`,
+            el("span", { class: "badge " + (m.s >= META.same_story_score ? "same" : "rel"), text: m.s >= META.same_story_score ? "same story" : "related" })),
+          el("div", { class: "t", text: b.e }))));
+    }
+    d.append(el("div", { class: "note", text: "Score = cosine similarity between article vectors in different languages. " +
+      `≥ ${META.same_story_score} was read as the same story; ${META.neighbour_min_score}–${META.same_story_score} as related coverage.` }));
+    if (window.innerWidth < 860) d.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function setupExplore() {
+    const chips = $("#langchips");
+    for (const l of LANGS) {
+      const c = el("button", { class: "chip on", text: srcName(l), onclick: () => {
+        if (state.langs.has(l) && state.langs.size > 1) state.langs.delete(l); else state.langs.add(l);
+        c.classList.toggle("on", state.langs.has(l)); state.limit = 60; renderResults();
+      } });
+      chips.append(c);
+    }
+    let t = null;
+    $("#q").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value.trim(); state.limit = 60; renderResults(); }, 150); });
+    $("#multi").addEventListener("change", (e) => { state.multi = e.target.checked; state.limit = 60; renderResults(); });
+    renderResults();
+  }
+
+  // ---------- Load ----------
+  Promise.all(["meta", "answers", "articles"].map((f) => fetch(`data/${f}.json`).then((r) => {
+    if (!r.ok) throw new Error(`data/${f}.json: ${r.status}`); return r.json();
+  }))).then(([meta, answers, articles]) => {
+    META = meta; ANSWERS = answers; ARTICLES = articles;
+    const same = ARTICLES.filter((a) => bestScore(a) >= META.same_story_score).length;
+    $("#stats").replaceChildren(
+      el("div", {}, el("b", { text: META.articles.toLocaleString() }), "articles"),
+      el("div", {}, el("b", { text: "5" }), "newspapers"),
+      el("div", {}, el("b", { text: same.toLocaleString() }), "articles with a same-story match"),
+      el("div", {}, el("b", { text: ANSWERS.length }), "featured answers"));
+    const ql = $("#qlist");
+    ANSWERS.forEach((a, i) => {
+      const covered = a.coverage.filter((c) => c.relevant_articles !== "0").length;
+      ql.append(el("button", { onclick: () => showAnswer(i) }, el("span", { class: "n", text: `${covered}/6` }), a.question));
+    });
+    if (ANSWERS.length) showAnswer(0); else $("#answer").replaceChildren(el("div", { class: "card", text: "No featured answers exported yet." }));
+    setupExplore();
+  }).catch((e) => {
+    $("#answer").replaceChildren(el("div", { class: "card", text: "Could not load the data files (" + e.message + ")." }));
+  });
+})();
+</script>
+</body>
+</html>
